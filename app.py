@@ -4,7 +4,6 @@ from io import BytesIO, StringIO
 from openpyxl.styles import PatternFill
 import re
 import numpy as np
-from openpyxl.utils.dataframe import dataframe_to_rows
 
 # Custom CSS for better styling
 st.markdown("""
@@ -129,10 +128,6 @@ st.markdown("""
         box-shadow: 0 4px 8px rgba(102, 126, 234, 0.4);
     }
     
-    .stButton > button:focus {
-        box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.3);
-    }
-    
     /* Download button styling */
     .download-btn {
         background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
@@ -173,23 +168,6 @@ st.markdown("""
         border-radius: 3px;
     }
     
-    /* Expander styling */
-    .streamlit-expanderHeader {
-        font-weight: 600;
-        color: #2c3e50;
-    }
-    
-    /* Dataframe styling */
-    .dataframe {
-        border-radius: 10px;
-        overflow: hidden;
-    }
-    
-    /* Progress bar styling */
-    .stProgress > div > div {
-        background: linear-gradient(90deg, #667eea, #764ba2);
-    }
-    
     /* Footer styling */
     .footer {
         text-align: center;
@@ -197,16 +175,6 @@ st.markdown("""
         padding: 2rem 0;
         border-top: 1px solid #e9ecef;
         margin-top: 2rem;
-    }
-    
-    /* Responsive adjustments */
-    @media (max-width: 768px) {
-        .metric-value {
-            font-size: 1.5rem;
-        }
-        .main-title {
-            font-size: 1.8rem !important;
-        }
     }
     </style>
 """, unsafe_allow_html=True)
@@ -412,17 +380,43 @@ if uploaded_file:
             
             with st.spinner("🔄 Processing mobile numbers..."):
                 
-                # Step 1: Clean values (5%)
+                # Step 1: Clean values using the robust logic from the first code
                 status_text.text("🧹 Cleaning numbers...")
                 progress_bar.progress(5)
                 
-                # Clean values using vectorized operations
+                # Clean values using vectorized operations - ENHANCED CLEANING
                 df[column] = df[column].astype(str).str.strip()
                 
-                # Remove spaces, dashes, brackets, plus signs - vectorized
-                df['cleaned_number'] = df[column].str.replace(r'[\s\-\(\)\+]', '', regex=True)
+                # Remove spaces, hyphens, brackets, plus signs, dots, and alphabetic characters
+                df['cleaned_number'] = (
+                    df[column]
+                    .astype(str)
+                    .str.strip()
+                    # Remove spaces, hyphens, brackets, plus signs and dots
+                    .str.replace(r'[\s\-\(\)\+\.]', '', regex=True)
+                    # Remove alphabetic characters (A-Z, a-z)
+                    .str.replace(r'[A-Za-z]', '', regex=True)
+                )
                 
-                # Step 2: Basic validation (15%)
+                # Step 2: Remove Indian +91 / 91 prefix when followed by a mobile number
+                status_text.text("🗑️ Removing country codes...")
+                progress_bar.progress(10)
+                
+                # Remove +91 / 91 prefix when followed by a valid mobile number (starts 6-9, exactly 10 digits)
+                df['cleaned_number'] = df['cleaned_number'].str.replace(
+                    r'^91([6-9]\d{9})$', 
+                    r'\1', 
+                    regex=True
+                )
+                
+                # Remove leading zeros (STD codes) for Indian numbers
+                df['cleaned_number'] = df['cleaned_number'].str.replace(
+                    r'^0+(\d{10})$', 
+                    r'\1', 
+                    regex=True
+                )
+                
+                # Step 3: Basic validation
                 status_text.text("✅ Validating number formats...")
                 progress_bar.progress(15)
                 
@@ -436,7 +430,7 @@ if uploaded_file:
                     # Check if number is exactly 10 digits
                     is_10_digits = cleaned_series.str.fullmatch(r'^\d{10}$', na=False)
                     
-                    # Basic valid mask - using numpy for faster operations
+                    # Basic valid mask
                     valid_mask = cleaned_series.str.fullmatch(mobile_pattern, na=False)
                     
                     # Landline indicators - ONLY apply to 10-digit numbers
@@ -474,7 +468,7 @@ if uploaded_file:
                     landline_mask = pd.Series(False, index=df.index)
                     std_code_mask = pd.Series(False, index=df.index)
                 
-                # Step 3: Find duplicates (35%)
+                # Step 4: Find duplicates (35%)
                 status_text.text("🔍 Checking for duplicates...")
                 progress_bar.progress(35)
                 
@@ -507,7 +501,7 @@ if uploaded_file:
                         # Assign back to duplicate_mask using proper index alignment
                         duplicate_mask.loc[valid_indices] = dup_series.values
                 
-                # Step 4: Create remarks (60%)
+                # Step 5: Create remarks (60%)
                 status_text.text("📝 Generating remarks...")
                 progress_bar.progress(60)
                 
@@ -545,7 +539,8 @@ if uploaded_file:
                         remarks[cleaned.str.len() < 10] = "Too Short"
                         remarks[cleaned.str.len() > 15] = "Too Long"
                         
-                        # Numbers with letters or special characters
+                        # Numbers with letters or special characters (after cleaning - they should be removed)
+                        # Since we already removed letters, this check is redundant but kept for safety
                         has_letters = cleaned.str.contains(r'[A-Za-z]', na=False)
                         remarks[has_letters & (remarks == "")] = "Invalid Format"
                     
@@ -563,7 +558,7 @@ if uploaded_file:
                 
                 df["Remarks"] = remarks
                 
-                # Step 5: Handle duplicate removal (80%)
+                # Step 6: Handle duplicate removal (80%)
                 status_text.text("🗑️ Processing duplicate removal...")
                 progress_bar.progress(80)
                 
@@ -576,7 +571,7 @@ if uploaded_file:
                     # Recalculate remarks for remaining records
                     df["Remarks"] = df["Remarks"].where(df["Remarks"] != "Duplicate", "")
                 
-                # Step 6: Calculate statistics (90%)
+                # Step 7: Calculate statistics (90%)
                 status_text.text("📊 Calculating statistics...")
                 progress_bar.progress(90)
                 
@@ -659,6 +654,20 @@ if uploaded_file:
                     </div>
                     """, unsafe_allow_html=True)
                 
+                # Show cleaning examples
+                with st.expander("🧹 View Cleaning Examples", expanded=False):
+                    st.markdown("""
+                    **How numbers are cleaned:**
+                    - `99429abc5500` → `994295500` (letters removed)
+                    - `+91 9942925500` → `9942925500` (spaces, plus removed, country code removed)
+                    - `99429-255-00` → `9942925500` (hyphens removed)
+                    - `(99429)25500` → `9942925500` (brackets removed)
+                    """)
+                    
+                    # Show sample of cleaned numbers
+                    sample_df = df.head(10)[[column, 'cleaned_number', 'Remarks']].copy()
+                    st.dataframe(sample_df, use_container_width=True)
+                
                 # Show duplicate details
                 with st.expander("🔄 View Duplicate Details", expanded=False):
                     duplicate_sample = df[df["Remarks"] == "Duplicate"]
@@ -698,7 +707,7 @@ if uploaded_file:
                                                             "Landline (starts with 0 or 1-5)", "Landline (STD code detected)",
                                                             "Too Short", "Too Long"])]
                     if not invalid_sample.empty:
-                        st.dataframe(invalid_sample[[column, "Remarks"]].head(20), use_container_width=True)
+                        st.dataframe(invalid_sample[[column, 'cleaned_number', "Remarks"]].head(20), use_container_width=True)
                         st.caption(f"Showing first 20 of {invalid_count:,} invalid records")
                     else:
                         st.info("🎉 No invalid numbers found! All numbers are valid.")
@@ -1077,6 +1086,7 @@ else:
         
         ### Features:
         - ✅ Validates 10-digit Indian mobile numbers (starting with 6-9)
+        - 🧹 Removes spaces, hyphens, brackets, plus signs, dots, and alphabetic characters
         - ❌ Identifies landline numbers (starting with 0 or 1-5)
         - 🔄 Detects duplicate numbers (keeps first, marks rest)
         - 🎨 Color-coded Excel output (Green=Valid, Red=Duplicate, Orange=Landline, Yellow=Invalid)
